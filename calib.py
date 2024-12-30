@@ -5,6 +5,7 @@ from scipy.spatial.transform import Rotation as R
 import os
 import yaml
 import json
+import argparse
 from datetime import datetime
 
 class ArUco3DProcessor:
@@ -259,17 +260,38 @@ def numpy_to_list(data):
 
 
 if __name__ == "__main__":
-    intrinsic_matrix = np.array([[1000, 0, 640], [0, 1000, 360], [0, 0, 1]], dtype=np.float32)
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Process ArUco marker 3D transformations.")
+    parser.add_argument(
+        "--data_directory",
+        type=str,
+        default=os.path.join(os.getcwd(), "data"),
+        help="Path to the data directory containing input files. Default is './data'."
+    )
+    parser.add_argument(
+        "--output_directory",
+        type=str,
+        default=os.path.join(os.getcwd(), "output"),
+        help="Path to the output directory for saving results. Default is './output'."
+    )
+    args = parser.parse_args()
 
-    data_directory = os.path.join(os.getcwd(), "data")
-    output_directory = os.path.join(os.getcwd(), "output")
+    # Use parsed arguments
+    data_directory = args.data_directory
+    output_directory = args.output_directory
 
+    # Ensure output directory exists
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
 
+    # Intrinsic matrix for camera
+    intrinsic_matrix = np.array([[1000, 0, 640], [0, 1000, 360], [0, 0, 1]], dtype=np.float32)
+
+    # Initialize processor
     processor = ArUco3DProcessor(intrinsic_matrix, data_directory, output_directory, debug_mode=True)
     match_results = processor.process()
 
+    # Print results
     for result in match_results:
         print(f"Processing {result['left_file']} and {result['right_file']}")
         print(f"Number of matched pairs: {len(result['matched_pairs'])}")
@@ -281,9 +303,9 @@ if __name__ == "__main__":
     with open(os.path.join(output_directory, "match_results.json"), "w") as json_file:
         json.dump(match_results_cleaned, json_file)
 
-
     # Calculate final transformation across all data
     final_transformation = calculate_final_transformation(match_results)
-    
+
+    # Print final transformation
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[DEBUG] {timestamp} - Final transformation matrix:\n{final_transformation}")
