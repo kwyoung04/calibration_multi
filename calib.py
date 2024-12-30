@@ -184,8 +184,8 @@ class ArUco3DProcessor:
                 self.debug(f"Estimated transformation matrix:\n{transformation_matrix}")
 
                 # Apply transformation to right point cloud and merge
-                right_pcd.transform(transformation_matrix)
-                merged_pcd = left_pcd + right_pcd
+                #right_pcd.transform(transformation_matrix)
+                #merged_pcd = left_pcd + right_pcd
 
                 results.append({
                     'left_file': left_file,
@@ -198,7 +198,7 @@ class ArUco3DProcessor:
                 })
 
                 # Save intermediate results
-                o3d.io.write_point_cloud(os.path.join(self.output_dir, f"merged_{left_file.split('.')[0]}.ply"), merged_pcd)
+                #o3d.io.write_point_cloud(os.path.join(self.output_dir, f"merged_{left_file.split('.')[0]}.ply"), merged_pcd)
 
         return results
 
