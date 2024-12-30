@@ -183,20 +183,8 @@ class ArUco3DProcessor:
                 self.debug(f"Estimated transformation matrix:\n{transformation_matrix}")
 
                 # Apply transformation to right point cloud and merge
-                self.debug(f"Transformation matrix:\n{transformation_matrix}")
-                if np.any(np.isnan(transformation_matrix)) or np.any(np.isinf(transformation_matrix)):
-                    self.debug("Transformation matrix contains NaN or Inf values. Aborting transformation.")
-                    return
-
-                try:
-                    right_pcd.transform(transformation_matrix)
-                    self.debug(f"Right PCD points after transform: {len(right_pcd.points)}")
-                    if len(right_pcd.points) > 0:
-                        transformed_points = np.asarray(right_pcd.points)[:5]
-                        self.debug(f"First 5 points of Right PCD after transform: {transformed_points}")
-                except Exception as e:
-                    self.debug(f"Error during transforming Right PCD: {e}")
-                    return
+                right_pcd.transform(transformation_matrix)
+                merged_pcd = left_pcd + right_pcd
 
                 results.append({
                     'left_file': left_file,
@@ -209,7 +197,7 @@ class ArUco3DProcessor:
                 })
 
                 # Save intermediate results
-                o3d.io.write_point_cloud(os.path.join(self.output_dir, f"merged_{left_file.split('.')[0]}_{right_file.split('.')[0]}.ply"), merged_pcd)
+                o3d.io.write_point_cloud(os.path.join(self.output_dir, f"merged_{left_file.split('.')[0]}.ply"), merged_pcd)
 
         return results
 
@@ -253,8 +241,7 @@ def calculate_final_transformation(results):
     transformation_matrix[:3, :3] = R_matrix
     transformation_matrix[:3, 3] = t_vector
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[DEBUG] {timestamp} - Final transformation matrix:\n{transformation_matrix}")
+
 
     return transformation_matrix
 
@@ -273,8 +260,12 @@ def numpy_to_list(data):
 
 if __name__ == "__main__":
     intrinsic_matrix = np.array([[1000, 0, 640], [0, 1000, 360], [0, 0, 1]], dtype=np.float32)
-    data_directory = "data"
-    output_directory = "output"
+
+    data_directory = os.path.join(os.getcwd(), "data")
+    output_directory = os.path.join(os.getcwd(), "output")
+
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
 
     processor = ArUco3DProcessor(intrinsic_matrix, data_directory, output_directory, debug_mode=True)
     match_results = processor.process()
@@ -287,10 +278,12 @@ if __name__ == "__main__":
 
     # Save match results to JSON
     match_results_cleaned = [numpy_to_list(entry) for entry in match_results]
-    with open(os.path.join(output_directory, "match_results.yaml"), "w") as yaml_file:
-        yaml.safe_dump(match_results_cleaned, yaml_file, default_flow_style=False)
+    with open(os.path.join(output_directory, "match_results.json"), "w") as json_file:
+        json.dump(match_results_cleaned, json_file)
+
 
     # Calculate final transformation across all data
     final_transformation = calculate_final_transformation(match_results)
-    print("Final Transformation Matrix Across All Data:")
-    print(final_transformation)
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[DEBUG] {timestamp} - Final transformation matrix:\n{final_transformation}")
