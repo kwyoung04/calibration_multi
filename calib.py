@@ -24,6 +24,18 @@ class ArUco3DProcessor:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"[DEBUG] {timestamp} - {message}")
 
+    def filter_zero_points(self, pcd):
+        points = np.asarray(pcd.points)
+        colors = np.asarray(pcd.colors) if pcd.has_colors() else None
+        non_zero_indices = np.where(~np.all(points == 0, axis=1))[0]
+
+        filtered_pcd = o3d.geometry.PointCloud()
+        filtered_pcd.points = o3d.utility.Vector3dVector(points[non_zero_indices])
+        if colors is not None:
+            filtered_pcd.colors = o3d.utility.Vector3dVector(colors[non_zero_indices])
+
+        return filtered_pcd
+
     def detect_aruco(self, image):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         aruco_corners, aruco_ids, _ = cv2.aruco.detectMarkers(
@@ -110,7 +122,7 @@ class ArUco3DProcessor:
 
         return flat, merged_pcd
 
-    def process(self):
+    def process(self, max_distance=500):
         # Load all files from directories
         left_files = sorted([f for f in os.listdir(self.left_dir) if f.endswith('.ply')])
         right_files = sorted([f for f in os.listdir(self.right_dir) if f.endswith('.ply')])
@@ -127,9 +139,12 @@ class ArUco3DProcessor:
             left_pcd = o3d.io.read_point_cloud(os.path.join(self.left_dir, left_file))
             right_pcd = o3d.io.read_point_cloud(os.path.join(self.right_dir, right_file))
 
+            left_pcd = self.filter_zero_points(left_pcd)
+            right_pcd = self.filter_zero_points(right_pcd)
+
             # Save point clouds for visualization
-            o3d.io.write_point_cloud(os.path.join(self.output_dir, f"{left_file.split('.')[0]}.ply"), left_pcd)
-            o3d.io.write_point_cloud(os.path.join(self.output_dir, f"{right_file.split('.')[0]}.ply"), right_pcd)
+            o3d.io.write_point_cloud(os.path.join(self.output_dir, f"{left_file.split('.')[0]}.ply"), left_pcd.voxel_down_sample(voxel_size=5))
+            o3d.io.write_point_cloud(os.path.join(self.output_dir, f"{right_file.split('.')[0]}.ply"), right_pcd.voxel_down_sample(voxel_size=5))
 
             # Process the rest of the pipeline (projection, matching, etc.)
             image1_projected, colors1 = self.project_to_2d(left_pcd)
@@ -142,16 +157,14 @@ class ArUco3DProcessor:
             aruco_corners1, aruco_ids1 = self.detect_aruco(image1)
             aruco_corners2, aruco_ids2 = self.detect_aruco(image2)
 
-            detected_image1 = image1.copy()
-            detected_image2 = image2.copy()
             if aruco_ids1 is not None:
-                detected_image1 = cv2.aruco.drawDetectedMarkers(detected_image1, aruco_corners1, aruco_ids1)
+                image1 = cv2.aruco.drawDetectedMarkers(image1, aruco_corners1, aruco_ids1)
             if aruco_ids2 is not None:
-                detected_image2 = cv2.aruco.drawDetectedMarkers(detected_image2, aruco_corners2, aruco_ids2)
+                image2 = cv2.aruco.drawDetectedMarkers(image2, aruco_corners2, aruco_ids2)
 
             # Save detected images for debugging
-            cv2.imwrite(os.path.join(self.output_dir, f"detected_{left_file.split('.')[0]}.png"), detected_image1)
-            cv2.imwrite(os.path.join(self.output_dir, f"detected_{right_file.split('.')[0]}.png"), detected_image2)
+            cv2.imwrite(os.path.join(self.output_dir, f"detected_{left_file.split('.')[0]}.png"), image1)
+            cv2.imwrite(os.path.join(self.output_dir, f"detected_{right_file.split('.')[0]}.png"), image2)
 
             if aruco_ids1 is not None and aruco_ids2 is not None:
                 matched_ids = set(map(int, aruco_ids1.flatten())).intersection(map(int, aruco_ids2.flatten()))
@@ -183,9 +196,27 @@ class ArUco3DProcessor:
                 transformation_matrix = self.estimate_transformation(matched_pairs)
                 self.debug(f"Estimated transformation matrix:\n{transformation_matrix}")
 
+                # Apply transformation and validate
+                transformed_right_points = [
+                    transformation_matrix[:3, :3] @ right + transformation_matrix[:3, 3]
+                    for _, right in matched_pairs
+                ]
+
+                # Check each matched pair distance
+                skip_transformation = False
+                for left, transformed_right in zip([pair[0] for pair in matched_pairs], transformed_right_points):
+                    if np.linalg.norm(left - transformed_right) > max_distance:
+                        self.debug("Skipping transformation due to excessive distance.")
+                        skip_transformation = True
+                        break
+
+                if skip_transformation:
+                    continue
+
                 # Apply transformation to right point cloud and merge
-                #right_pcd.transform(transformation_matrix)
-                #merged_pcd = left_pcd + right_pcd
+                right_pcd.transform(transformation_matrix)
+                merged_pcd = left_pcd + right_pcd
+                merged_pcd = merged_pcd.voxel_down_sample(voxel_size=5)
 
                 results.append({
                     'left_file': left_file,
@@ -198,9 +229,10 @@ class ArUco3DProcessor:
                 })
 
                 # Save intermediate results
-                #o3d.io.write_point_cloud(os.path.join(self.output_dir, f"merged_{left_file.split('.')[0]}.ply"), merged_pcd)
+                o3d.io.write_point_cloud(os.path.join(self.output_dir, f"merged_{left_file.split('.')[0]}.ply"), merged_pcd)
 
         return results
+
 
     def points_to_image(self, projected_points, projected_colors, width, height):
         image = np.zeros((height, width, 3), dtype=np.uint8)
@@ -303,9 +335,9 @@ if __name__ == "__main__":
     with open(os.path.join(output_directory, "match_results.json"), "w") as json_file:
         json.dump(match_results_cleaned, json_file)
 
-    # Calculate final transformation across all data
-    final_transformation = calculate_final_transformation(match_results)
+    matrices = [np.array(result['transformation_matrix']) for result in match_results]
+    average_matrix = sum(matrices) / len(matrices)
 
-    # Print final transformation
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[DEBUG] {timestamp} - Final transformation matrix:\n{final_transformation}")
+    with open(os.path.join(output_directory, "transformation_matrix.txt"), "w") as matrix_file:
+        for row in average_matrix.tolist():
+            matrix_file.write(" ".join(map(str, row)) + "\n")
